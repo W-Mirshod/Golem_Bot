@@ -89,6 +89,20 @@ The bot displays the following information:
 - Ensure GolemSP is installed
 - Verify `golemsp` is in your PATH
 - Try running `golemsp status` manually in terminal
+- If using Docker, check that the volume mount path in `docker-compose.yml` is correct
+
+### Permission denied error
+- Ensure the `golemsp` binary has execute permissions:
+  ```bash
+  chmod +x /usr/local/bin/golemsp
+  # Or wherever your golemsp binary is located
+  ```
+- Check file ownership if running in Docker:
+  ```bash
+  ls -l /usr/local/bin/golemsp
+  ```
+- If using Docker, the container may need to run as root or with proper user permissions
+- Verify the user running the bot has permission to execute the binary
 
 ### Command timeout
 - The bot has a 30-second timeout for the status command
