@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  golemsp-bot:
+    build: .
+    container_name: golemsp-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount golemsp binary from host (adjust path if different)
+      - /usr/local/bin/golemsp:/usr/local/bin/golemsp:ro
+      # Optionally mount golemsp config directory if needed
+      # - /path/to/golemsp/config:/root/.local/share/golemsp:ro
+    # Use host network to access golemsp service if it's running on host
+    network_mode: host
+    # Alternative: if golemsp is in another container, use bridge network
+    # networks:
+    #   - golemsp-network
+
+# Uncomment if using bridge network instead of host network
+# networks:
+#   golemsp-network:
+#     external: true
+
