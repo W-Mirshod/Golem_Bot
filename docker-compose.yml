@@ -5,20 +5,34 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - HOME=/home/mer
+      - XDG_RUNTIME_DIR=/run/user/1000
+      - PATH=/usr/local/bin:/usr/bin:/bin
     volumes:
       # Mount golemsp binary from host (mount the actual binary, not the symlink)
       # Note: The binary must have execute permissions on the host
       - /home/mer/.local/share/ya-installer/bundles/golem-provider-linux-v0.17.6/golemsp:/usr/local/bin/golemsp:ro
+      # Mount ya-provider and yagna binaries (golemsp may need to access them)
+      - /home/mer/.local/share/ya-installer/bundles/golem-provider-linux-v0.17.6/ya-provider:/usr/local/bin/ya-provider:ro
+      - /home/mer/.local/share/ya-installer/bundles/golem-provider-linux-v0.17.6/yagna:/usr/local/bin/yagna:ro
       # Mount golemsp configuration directory (needs write access for lock files)
-      - /home/mer/.local/share/ya-provider:/root/.local/share/ya-provider:rw
+      # Mount to user's home directory when running as user 1000
+      - /home/mer/.local/share/ya-provider:/home/mer/.local/share/ya-provider:rw
       # Mount yagna plugins directory if needed
-      - /home/mer/.local/lib/yagna:/root/.local/lib/yagna:ro
+      - /home/mer/.local/lib/yagna:/home/mer/.local/lib/yagna:ro
       # Mount yagna share directory (may contain runtime files)
-      - /home/mer/.local/share/yagna:/root/.local/share/yagna:ro
+      - /home/mer/.local/share/yagna:/home/mer/.local/share/yagna:ro
+      # Mount yagna Unix socket for IPC communication
+      - /tmp/yagna.sock:/tmp/yagna.sock:rw
+      # Mount yagna runtime directory (contains service files)
+      - /run/user/1000/yagna:/run/user/1000/yagna:ro
+      # Mount entire user runtime directory (golemsp may need access to other runtime files)
+      - /run/user/1000:/run/user/1000:ro
     # Use host network to access golemsp service if it's running on host
     network_mode: host
-    # Run as root to ensure permissions (or set user if needed)
-    # user: "1000:1000"  # Uncomment and adjust if you need to run as specific user
+    # Run as the same user as ya-provider service for proper IPC access
+    user: "1000:1000"
     # Alternative: if golemsp is in another container, use bridge network
     # networks:
     #   - golemsp-network
