@@ -8,6 +8,12 @@ A Telegram bot that allows you to check the status of your GolemSP service with 
 - Direct `/status` command support
 - Formatted status output with all service information
 - Error handling for service issues
+- **Real-time notifications for:**
+  - 🎯 New job assignments
+  - ✅ Job completions
+  - 💰 GLM payment receipts
+- Background monitoring with configurable intervals
+- User notification management (enable/disable)
 
 ## Prerequisites
 
@@ -50,6 +56,22 @@ pip install -r requirements.txt
 
    Replace `your_telegram_bot_token_here` with the token you received from BotFather.
 
+### Optional Configuration
+
+You can customize the monitoring behavior by setting these environment variables in your `.env` file:
+
+- `MONITORING_ENABLED` (default: `true`) - Enable/disable background monitoring
+- `MONITORING_INTERVAL` (default: `300`) - Check interval in seconds (300 = 5 minutes)
+
+Example:
+```bash
+# Disable monitoring
+MONITORING_ENABLED=false
+
+# Check every 10 minutes
+MONITORING_INTERVAL=600
+```
+
 ### 4. Run the Bot
 
 ```bash
@@ -64,9 +86,25 @@ Starting GolemSP Status Bot...
 ## Usage
 
 1. Open Telegram and search for your bot (using the username you set with BotFather)
-2. Send `/start` to begin
+2. Send `/start` to begin (automatically enables notifications)
 3. Click the "Check GolemSP Status" button to get the current status
 4. Alternatively, use `/status` command directly
+
+### Notification Commands
+
+- `/enable_notifications` - Enable job and payment notifications
+- `/disable_notifications` - Disable notifications
+- `/notification_status` - Check your current notification settings
+
+### Notification Types
+
+The bot will send you real-time notifications when:
+
+- **🎯 New Job Alert**: When you receive new tasks to process
+- **✅ Job Completed**: When tasks are successfully completed
+- **💰 Payment Received**: When you receive GLM tokens for completed work
+
+Notifications are sent every 5 minutes (configurable) when changes are detected.
 
 ## Status Information
 
