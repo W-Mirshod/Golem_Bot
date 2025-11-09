@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
+from platforms.render_network import check_render_status, parse_render_status, format_render_status
+from platforms.ai_training import check_ai_training_status, parse_ai_training_status, format_ai_training_status
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +37,10 @@ MONITORING_ENABLED = os.getenv('MONITORING_ENABLED', 'true').lower() == 'true'
 MONITORING_INTERVAL = int(os.getenv('MONITORING_INTERVAL', '300'))  # 5 minutes default
 STATE_FILE = os.path.join(os.path.dirname(__file__), 'bot_state.json')
 USERS_FILE = os.path.join(os.path.dirname(__file__), 'registered_users.json')
+
+# Platform configuration
+RENDER_NETWORK_ENABLED = os.getenv('RENDER_NETWORK_ENABLED', 'false').lower() == 'true'
+AI_TRAINING_ENABLED = os.getenv('AI_TRAINING_ENABLED', 'false').lower() == 'true'
 
 # Global variables for monitoring
 monitoring_task = None
@@ -718,6 +724,14 @@ def get_reply_keyboard():
         [KeyboardButton("📊 Service Status"), KeyboardButton("💰 Wallet Info")],
         [KeyboardButton("⚡ Task Statistics")]
     ]
+    
+    # Always show platform buttons, even if not enabled
+    platform_row = []
+    platform_row.append(KeyboardButton("🎨 Render Status"))
+    platform_row.append(KeyboardButton("🤖 AI Training Status"))
+    keyboard.append(platform_row)
+    keyboard.append([KeyboardButton("🌐 All Platforms")])
+    
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 
@@ -743,7 +757,7 @@ async def send_notification(bot, chat_id, message):
 
 async def monitoring_loop(application):
     """
-    Background monitoring loop that checks for job and payment changes.
+    Background monitoring loop that checks for job and payment changes across all platforms.
     """
     global last_status_data
 
@@ -751,6 +765,8 @@ async def monitoring_loop(application):
 
     # Load previous state
     previous_state = load_previous_state()
+    previous_render_state = previous_state.get('render', {})
+    previous_ai_state = previous_state.get('ai_training', {})
 
     while True:
         try:
@@ -759,35 +775,34 @@ async def monitoring_loop(application):
                 logger.info("Monitoring disabled, stopping loop")
                 break
 
-            # Get current status
-            success, output, error = run_golemsp_status()
+            notification_messages = []
 
+            # Check GolemSP status
+            success, output, error = run_golemsp_status()
             if success:
                 current_data = parse_status_data(output)
+                golem_previous = previous_state.get('golem', {})
 
                 # Detect changes
-                changes = detect_changes(current_data, previous_state)
+                changes = detect_changes(current_data, golem_previous)
 
-                # Send notifications if there are changes
                 if any(changes.values()) and registered_users:
-                    notification_messages = []
-
                     if changes['new_jobs']:
                         current_jobs = current_data.get('tasks', {}).get('in_progress', 0)
-                        previous_jobs = previous_state.get('tasks', {}).get('in_progress', 0)
+                        previous_jobs = golem_previous.get('tasks', {}).get('in_progress', 0)
                         new_jobs_count = current_jobs - previous_jobs
                         notification_messages.append(
-                            f"🎯 *New Job Alert!*\n"
+                            f"🎯 *GolemSP: New Job Alert!*\n"
                             f"You've received {new_jobs_count} new task(s)!\n"
                             f"Currently processing: {current_jobs} tasks"
                         )
 
                     if changes['completed_jobs']:
                         current_total = current_data.get('tasks', {}).get('total_processed', 0)
-                        previous_total = previous_state.get('tasks', {}).get('total_processed', 0)
+                        previous_total = golem_previous.get('tasks', {}).get('total_processed', 0)
                         completed_count = current_total - previous_total
                         notification_messages.append(
-                            f"✅ *Job Completed!*\n"
+                            f"✅ *GolemSP: Job Completed!*\n"
                             f"Successfully completed {completed_count} task(s)!\n"
                             f"Total processed: {current_total} tasks"
                         )
@@ -796,24 +811,91 @@ async def monitoring_loop(application):
                         balance_change = changes['wallet_balance_change']
                         current_balance = current_data.get('wallet', {}).get('total_glm', 0.0)
                         notification_messages.append(
-                            f"💰 *Payment Received!*\n"
+                            f"💰 *GolemSP: Payment Received!*\n"
                             f"You've received `{balance_change:.6f} GLM`!\n"
                             f"Current balance: `{current_balance:.6f} GLM`"
                         )
 
-                    # Send notifications to all registered users
-                    if notification_messages:
-                        for chat_id in registered_users.copy():  # Copy to avoid modification during iteration
-                            for message in notification_messages:
-                                await send_notification(application.bot, chat_id, message)
-                                await asyncio.sleep(0.1)  # Small delay to avoid rate limiting
-
-                # Save current state for next comparison
-                save_current_state(current_data)
-                previous_state = current_data.copy()
-
+                # Update previous state
+                previous_state['golem'] = current_data.copy()
             else:
-                logger.warning(f"Failed to get status in monitoring loop: {error}")
+                logger.warning(f"Failed to get GolemSP status in monitoring loop: {error}")
+
+            # Check Render Network status
+            if RENDER_NETWORK_ENABLED:
+                success, data, error = check_render_status()
+                if success:
+                    current_render_data = parse_render_status(data)
+                    
+                    # Check for changes
+                    prev_earnings = previous_render_state.get('total_earnings', 0.0)
+                    curr_earnings = current_render_data.get('total_earnings', 0.0)
+                    prev_jobs = previous_render_state.get('active_jobs', 0)
+                    curr_jobs = current_render_data.get('active_jobs', 0)
+                    
+                    if curr_earnings > prev_earnings and registered_users:
+                        earnings_change = curr_earnings - prev_earnings
+                        notification_messages.append(
+                            f"💰 *Render Network: Earnings Update!*\n"
+                            f"You've earned `{earnings_change:.6f} RENDER`!\n"
+                            f"Total earnings: `{curr_earnings:.6f} RENDER`"
+                        )
+                    
+                    if curr_jobs > prev_jobs and registered_users:
+                        new_jobs = curr_jobs - prev_jobs
+                        notification_messages.append(
+                            f"🎯 *Render Network: New Job!*\n"
+                            f"You've received {new_jobs} new job(s)!\n"
+                            f"Active jobs: {curr_jobs}"
+                        )
+                    
+                    previous_render_state = current_render_data.copy()
+                else:
+                    logger.warning(f"Failed to get Render Network status: {error}")
+
+            # Check AI Training status
+            if AI_TRAINING_ENABLED:
+                success, data, error = check_ai_training_status()
+                if success:
+                    current_ai_data = parse_ai_training_status(data)
+                    
+                    # Check for changes
+                    prev_earnings = previous_ai_state.get('total_earnings', 0.0)
+                    curr_earnings = current_ai_data.get('total_earnings', 0.0)
+                    prev_jobs = previous_ai_state.get('active_jobs', 0)
+                    curr_jobs = current_ai_data.get('active_jobs', 0)
+                    
+                    if curr_earnings > prev_earnings and registered_users:
+                        earnings_change = curr_earnings - prev_earnings
+                        notification_messages.append(
+                            f"💰 *AI Training: Earnings Update!*\n"
+                            f"You've earned `{earnings_change:.6f}`!\n"
+                            f"Total earnings: `{curr_earnings:.6f}`"
+                        )
+                    
+                    if curr_jobs > prev_jobs and registered_users:
+                        new_jobs = curr_jobs - prev_jobs
+                        notification_messages.append(
+                            f"🎯 *AI Training: New Job!*\n"
+                            f"You've received {new_jobs} new job(s)!\n"
+                            f"Active jobs: {curr_jobs}"
+                        )
+                    
+                    previous_ai_state = current_ai_data.copy()
+                else:
+                    logger.warning(f"Failed to get AI Training status: {error}")
+
+            # Send notifications to all registered users
+            if notification_messages and registered_users:
+                for chat_id in registered_users.copy():
+                    for message in notification_messages:
+                        await send_notification(application.bot, chat_id, message)
+                        await asyncio.sleep(0.1)  # Small delay to avoid rate limiting
+
+            # Save current state for next comparison
+            previous_state['render'] = previous_render_state
+            previous_state['ai_training'] = previous_ai_state
+            save_current_state(previous_state)
 
         except Exception as e:
             logger.error(f"Error in monitoring loop: {e}")
@@ -830,18 +912,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user(chat_id)
 
     welcome_message = (
-        "🎉 *Welcome to GolemSP Status Bot!*\n\n"
+        "🎉 *Welcome to Multi-Platform Status Bot!*\n\n"
         "✅ Notifications are now *ENABLED* for you!\n\n"
         "You'll receive alerts when:\n"
         "• 🎯 You get new jobs\n"
         "• ✅ Jobs are completed\n"
-        "• 💰 You receive GLM payments\n\n"
+        "• 💰 You receive payments\n\n"
         "Use the buttons below to check specific information:\n"
-        "📊 Service Status - Node and service details\n"
-        "💰 Wallet Info - Balance and address\n"
-        "⚡ Task Statistics - Processing metrics\n\n"
+        "📊 Service Status - GolemSP node and service details\n"
+        "💰 Wallet Info - GolemSP balance and address\n"
+        "⚡ Task Statistics - GolemSP processing metrics\n"
+    )
+    
+    welcome_message += (
+        "🎨 Render Status - Render Network status\n"
+        "🤖 AI Training Status - AI training platforms status\n"
+        "🌐 All Platforms - Combined status of all platforms\n\n"
         "Or use these commands:\n"
         "/status - Check full GolemSP status\n"
+        "/render_status - Check Render Network status\n"
+        "/ai_status - Check AI Training status\n"
+        "/all_status - Check all platforms status\n"
         "/enable_notifications - Enable notifications\n"
         "/disable_notifications - Disable notifications\n"
         "/notification_status - Check notification settings"
@@ -864,21 +955,114 @@ async def handle_keyboard_button(update: Update, context: ContextTypes.DEFAULT_T
         action='typing'
     )
 
-    # Run the status command to get data
-    success, output, error = run_golemsp_status()
-
-    if success:
-        if text == "📊 Service Status":
-            formatted_message = format_status_section(output)
-        elif text == "💰 Wallet Info":
-            formatted_message = format_wallet_section(output)
-        elif text == "⚡ Task Statistics":
-            formatted_message = format_tasks_section(output)
+    # Handle GolemSP buttons
+    if text in ["📊 Service Status", "💰 Wallet Info", "⚡ Task Statistics"]:
+        success, output, error = run_golemsp_status()
+        if success:
+            if text == "📊 Service Status":
+                formatted_message = format_status_section(output)
+            elif text == "💰 Wallet Info":
+                formatted_message = format_wallet_section(output)
+            elif text == "⚡ Task Statistics":
+                formatted_message = format_tasks_section(output)
         else:
-            # Unknown button, show help
-            formatted_message = "Please use the buttons below to check GolemSP information."
+            formatted_message = f"❌ Error checking GolemSP status:\n\n`{error}`"
+    
+    # Handle Render Network button
+    elif text == "🎨 Render Status":
+        if not RENDER_NETWORK_ENABLED:
+            formatted_message = (
+                "🎨 *Render Network Status*\n\n"
+                "⚠️ Render Network monitoring is not enabled.\n\n"
+                "To enable:\n"
+                "1. Set `RENDER_NETWORK_ENABLED=true` in your `.env` file\n"
+                "2. Restart the bot\n"
+                "3. Ensure Render Network worker is installed and running\n\n"
+                "Note: Without GPU, Render Network earnings will be limited."
+            )
+        else:
+            success, data, error = check_render_status()
+            if success:
+                parsed_data = parse_render_status(data)
+                formatted_message = format_render_status(parsed_data)
+            else:
+                formatted_message = f"❌ Error checking Render Network status:\n\n`{error}`"
+    
+    # Handle AI Training button
+    elif text == "🤖 AI Training Status":
+        if not AI_TRAINING_ENABLED:
+            formatted_message = (
+                "🤖 *AI Training Platform Status*\n\n"
+                "⚠️ AI Training platform monitoring is not enabled.\n\n"
+                "To enable:\n"
+                "1. Set `AI_TRAINING_ENABLED=true` in your `.env` file\n"
+                "2. Restart the bot\n"
+                "3. Install and configure AI training platform workers:\n"
+                "   - Together.ai: https://together.ai\n"
+                "   - Akash Network: https://akash.network\n\n"
+                "⚠️ Important: Without GPU, AI training earnings will be very limited.\n"
+                "Most AI workloads require GPU acceleration."
+            )
+        else:
+            success, data, error = check_ai_training_status()
+            if success:
+                parsed_data = parse_ai_training_status(data)
+                formatted_message = format_ai_training_status(parsed_data)
+            else:
+                formatted_message = f"❌ Error checking AI Training status:\n\n`{error}`"
+    
+    # Handle All Platforms button
+    elif text == "🌐 All Platforms":
+        formatted_message = "🌐 *All Platforms Status*\n\n"
+        
+        # GolemSP status
+        success, output, error = run_golemsp_status()
+        if success:
+            golem_data = parse_status_data(output)
+            golem_balance = golem_data.get('wallet', {}).get('total_glm', 0.0)
+            golem_tasks = golem_data.get('tasks', {}).get('in_progress', 0)
+            formatted_message += f"🚀 *GolemSP*\n"
+            formatted_message += f"• Balance: `{golem_balance:.6f} GLM`\n"
+            formatted_message += f"• Active Tasks: `{golem_tasks}`\n\n"
+        else:
+            formatted_message += f"🚀 *GolemSP*: ❌ Error\n\n"
+        
+        # Render Network status
+        if RENDER_NETWORK_ENABLED:
+            success, data, error = check_render_status()
+            if success:
+                render_data = parse_render_status(data)
+                render_earnings = render_data.get('total_earnings', 0.0)
+                render_jobs = render_data.get('active_jobs', 0)
+                formatted_message += f"🎨 *Render Network*\n"
+                formatted_message += f"• Earnings: `{render_earnings:.6f} RENDER`\n"
+                formatted_message += f"• Active Jobs: `{render_jobs}`\n\n"
+            else:
+                formatted_message += f"🎨 *Render Network*: ❌ Error\n\n"
+        else:
+            formatted_message += f"🎨 *Render Network*: ⚠️ Not enabled\n\n"
+        
+        # AI Training status
+        if AI_TRAINING_ENABLED:
+            success, data, error = check_ai_training_status()
+            if success:
+                ai_data = parse_ai_training_status(data)
+                ai_earnings = ai_data.get('total_earnings', 0.0)
+                ai_jobs = ai_data.get('active_jobs', 0)
+                formatted_message += f"🤖 *AI Training*\n"
+                formatted_message += f"• Earnings: `{ai_earnings:.6f}`\n"
+                formatted_message += f"• Active Jobs: `{ai_jobs}`\n\n"
+            else:
+                formatted_message += f"🤖 *AI Training*: ❌ Error\n\n"
+        else:
+            formatted_message += f"🤖 *AI Training*: ⚠️ Not enabled\n\n"
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+        formatted_message += f"🕒 Last updated: `{timestamp}`"
+    
     else:
-        formatted_message = f"❌ Error checking GolemSP status:\n\n`{error}`"
+        # Unknown button, show help
+        formatted_message = "Please use the buttons below to check platform information."
 
     await update.message.reply_text(
         formatted_message,
@@ -914,6 +1098,125 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def render_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /render_status command."""
+    if not RENDER_NETWORK_ENABLED:
+        await update.message.reply_text(
+            "❌ Render Network is not enabled. Set RENDER_NETWORK_ENABLED=true in .env",
+            parse_mode='Markdown',
+            reply_markup=get_reply_keyboard()
+        )
+        return
+    
+    await context.bot.send_chat_action(
+        chat_id=update.message.chat_id,
+        action='typing'
+    )
+    
+    success, data, error = check_render_status()
+    if success:
+        parsed_data = parse_render_status(data)
+        formatted_message = format_render_status(parsed_data)
+    else:
+        formatted_message = f"❌ Error checking Render Network status:\n\n`{error}`"
+    
+    await update.message.reply_text(
+        formatted_message,
+        parse_mode='Markdown',
+        reply_markup=get_reply_keyboard()
+    )
+
+
+async def ai_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ai_status command."""
+    if not AI_TRAINING_ENABLED:
+        await update.message.reply_text(
+            "❌ AI Training platforms are not enabled. Set AI_TRAINING_ENABLED=true in .env",
+            parse_mode='Markdown',
+            reply_markup=get_reply_keyboard()
+        )
+        return
+    
+    await context.bot.send_chat_action(
+        chat_id=update.message.chat_id,
+        action='typing'
+    )
+    
+    success, data, error = check_ai_training_status()
+    if success:
+        parsed_data = parse_ai_training_status(data)
+        formatted_message = format_ai_training_status(parsed_data)
+    else:
+        formatted_message = f"❌ Error checking AI Training status:\n\n`{error}`"
+    
+    await update.message.reply_text(
+        formatted_message,
+        parse_mode='Markdown',
+        reply_markup=get_reply_keyboard()
+    )
+
+
+async def all_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /all_status command."""
+    await context.bot.send_chat_action(
+        chat_id=update.message.chat_id,
+        action='typing'
+    )
+    
+    formatted_message = "🌐 *All Platforms Status*\n\n"
+    
+    # GolemSP status
+    success, output, error = run_golemsp_status()
+    if success:
+        golem_data = parse_status_data(output)
+        golem_balance = golem_data.get('wallet', {}).get('total_glm', 0.0)
+        golem_tasks = golem_data.get('tasks', {}).get('in_progress', 0)
+        formatted_message += f"🚀 *GolemSP*\n"
+        formatted_message += f"• Balance: `{golem_balance:.6f} GLM`\n"
+        formatted_message += f"• Active Tasks: `{golem_tasks}`\n\n"
+    else:
+        formatted_message += f"🚀 *GolemSP*: ❌ Error\n\n"
+    
+    # Render Network status
+    if RENDER_NETWORK_ENABLED:
+        success, data, error = check_render_status()
+        if success:
+            render_data = parse_render_status(data)
+            render_earnings = render_data.get('total_earnings', 0.0)
+            render_jobs = render_data.get('active_jobs', 0)
+            formatted_message += f"🎨 *Render Network*\n"
+            formatted_message += f"• Earnings: `{render_earnings:.6f} RENDER`\n"
+            formatted_message += f"• Active Jobs: `{render_jobs}`\n\n"
+        else:
+            formatted_message += f"🎨 *Render Network*: ❌ Error\n\n"
+    else:
+        formatted_message += f"🎨 *Render Network*: ⚠️ Not enabled\n\n"
+    
+    # AI Training status
+    if AI_TRAINING_ENABLED:
+        success, data, error = check_ai_training_status()
+        if success:
+            ai_data = parse_ai_training_status(data)
+            ai_earnings = ai_data.get('total_earnings', 0.0)
+            ai_jobs = ai_data.get('active_jobs', 0)
+            formatted_message += f"🤖 *AI Training*\n"
+            formatted_message += f"• Earnings: `{ai_earnings:.6f}`\n"
+            formatted_message += f"• Active Jobs: `{ai_jobs}`\n\n"
+        else:
+            formatted_message += f"🤖 *AI Training*: ❌ Error\n\n"
+    else:
+        formatted_message += f"🤖 *AI Training*: ⚠️ Not enabled\n\n"
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    formatted_message += f"🕒 Last updated: `{timestamp}`"
+    
+    await update.message.reply_text(
+        formatted_message,
+        parse_mode='Markdown',
+        reply_markup=get_reply_keyboard()
+    )
+
+
 async def start_monitoring(application):
     """Start the background monitoring task."""
     global monitoring_task
@@ -941,6 +1244,9 @@ def main():
     # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("render_status", render_status_command))
+    application.add_handler(CommandHandler("ai_status", ai_status_command))
+    application.add_handler(CommandHandler("all_status", all_status_command))
     application.add_handler(CommandHandler("enable_notifications", enable_notifications))
     application.add_handler(CommandHandler("disable_notifications", disable_notifications))
     application.add_handler(CommandHandler("notification_status", notification_status))

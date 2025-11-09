@@ -15,7 +15,7 @@ services:
       - /home/mer/.local/share/ya-installer/bundles/golem-provider-linux-v0.17.6/yagna:/usr/local/bin/yagna:ro
       - /home/mer/.local/share/ya-provider:/home/mer/.local/share/ya-provider:rw
       - /home/mer/.local/lib/yagna:/home/mer/.local/lib/yagna:ro
-      - /home/mer/.local/share/yagna:/home/mer/.local/share/yagna:ro
+      - /home/mer/.local/share/yagna:/home/mer/.local/share/yagna:rw
       - /tmp/yagna.sock:/tmp/yagna.sock:rw
       - /run/user/1000/yagna:/run/user/1000/yagna:ro
       - /run/user/1000:/run/user/1000:ro
